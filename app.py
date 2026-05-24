@@ -1,109 +1,150 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import requests
+import uuid
 
 app = Flask(__name__)
+CORS(app)
 
 BASE_URL = "https://web2.temp-mail.org"
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept-Language": "ar-DZ,ar;q=0.9,en-US;q=0.8",
+    "Origin": "https://temp-mail.org",
+    "Referer": "https://temp-mail.org/",
+    "Content-Type": "application/json"
+}
 
-class TempMail:
-    def __init__(self):
-        self.session = requests.Session()
-        self.token = None
-        self.email = None
+# تخزين الجلسات في الذاكرة: { session_id: { email, token } }
+SESSIONS = {}
 
-    def create_email(self):
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json",
-            "Origin": "https://temp-mail.org",
-            "Referer": "https://temp-mail.org/"
+
+def make_session():
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    try:
+        s.get("https://temp-mail.org/", timeout=10)
+    except Exception:
+        pass
+    return s
+
+
+@app.route("/", methods=["GET"])
+def index():
+    return jsonify({
+        "name": "TempMail API",
+        "version": "2.0.0",
+        "endpoints": {
+            "POST /mailbox": "إنشاء إيميل → يرجع session_id + email فقط",
+            "GET /messages/<session_id>": "جلب الرسائل بالـ session_id",
+            "DELETE /mailbox/<session_id>": "حذف الجلسة",
+            "GET /health": "حالة الـ API"
         }
-
-        try:
-            r = self.session.post(
-                f"{BASE_URL}/mailbox",
-                json={},
-                headers=headers,
-                timeout=15
-            )
-
-            print("STATUS:", r.status_code)
-            print("TEXT:", r.text[:200])
-
-            if r.status_code != 200:
-                return None
-
-            data = r.json()
-
-            self.token = data.get("token")
-            self.email = data.get("mailbox")
-
-            if not self.token or not self.email:
-                return None
-
-            return data
-
-        except Exception as e:
-            print("ERROR:", e)
-            return None
-
-    def get_messages(self):
-        if not self.token:
-            return []
-
-        try:
-            r = self.session.get(
-                f"{BASE_URL}/messages",
-                headers={"Authorization": f"Bearer {self.token}"},
-                timeout=15
-            )
-
-            if r.status_code != 200:
-                return []
-
-            return r.json().get("messages", [])
-
-        except Exception:
-            return []
-
-
-tm = TempMail()
-
-
-@app.route("/")
-def home():
-    return jsonify({
-        "status": "ok",
-        "service": "TempMail API"
     })
 
 
-@app.route("/create")
-def create():
-    data = tm.create_email()
-
-    if not data:
-        return jsonify({"error": "failed to create email"}), 500
-
-    return jsonify({
-        "email": tm.email,
-        "token": tm.token,
-        "status": "created"
-    })
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "active_sessions": len(SESSIONS)})
 
 
-@app.route("/messages")
-def messages():
-    token = request.headers.get("token")
+@app.route("/mailbox", methods=["POST"])
+def create_mailbox():
+    """إنشاء إيميل — التوكن يُحفظ server-side فقط"""
+    try:
+        sess = make_session()
+        r = sess.post(f"{BASE_URL}/mailbox", json={}, timeout=15)
 
-    if token:
-        tm.token = token
+        if r.status_code != 200:
+            return jsonify({"success": False, "error": f"فشل الطلب: {r.status_code}"}), 502
 
-    return jsonify({
-        "messages": tm.get_messages()
-    })
+        data = r.json()
+        email = data.get("mailbox")
+        token = data.get("token")
+
+        if not email or not token:
+            return jsonify({"success": False, "error": "لم يُرجع السيرفر mailbox أو token", "raw": data}), 502
+
+        # نحفظ التوكن عندنا ونرجع فقط session_id
+        session_id = str(uuid.uuid4())
+        SESSIONS[session_id] = {"email": email, "token": token}
+
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "email": email
+            # ❌ token لا يُرسل للمستخدم أبداً
+        })
+
+    except requests.exceptions.Timeout:
+        return jsonify({"success": False, "error": "انتهى وقت الاتصال"}), 504
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/messages/<session_id>", methods=["GET"])
+def get_messages(session_id):
+    """جلب الرسائل — المستخدم يرسل session_id فقط"""
+    session = SESSIONS.get(session_id)
+
+    if not session:
+        return jsonify({"success": False, "error": "session_id غير موجود أو منتهي"}), 404
+
+    token = session["token"]  # نجيب التوكن من الذاكرة
+
+    try:
+        sess = make_session()
+        r = sess.get(
+            f"{BASE_URL}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15
+        )
+
+        if r.status_code == 401:
+            # نحذف الجلسة المنتهية
+            SESSIONS.pop(session_id, None)
+            return jsonify({"success": False, "error": "انتهت صلاحية الإيميل", "expired": True}), 401
+
+        if r.status_code != 200:
+            return jsonify({"success": False, "error": f"خطأ: {r.status_code}"}), 502
+
+        messages = r.json().get("messages", [])
+
+        cleaned = []
+        for m in messages:
+            cleaned.append({
+                "id": m.get("_id"),
+                "from": m.get("from"),
+                "subject": m.get("subject"),
+                "date": m.get("createdAt") or m.get("date"),
+                "body_text": m.get("bodyText") or m.get("text_body"),
+                "body_html": m.get("bodyHtml") or m.get("html_body"),
+            })
+
+        return jsonify({
+            "success": True,
+            "email": session["email"],
+            "count": len(cleaned),
+            "messages": cleaned
+        })
+
+    except requests.exceptions.Timeout:
+        return jsonify({"success": False, "error": "انتهى وقت الاتصال"}), 504
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/mailbox/<session_id>", methods=["DELETE"])
+def delete_mailbox(session_id):
+    """حذف الجلسة من الذاكرة"""
+    if session_id in SESSIONS:
+        SESSIONS.pop(session_id)
+        return jsonify({"success": True, "message": "تم حذف الجلسة"})
+    return jsonify({"success": False, "error": "session_id غير موجود"}), 404
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=5000, debug=False)
