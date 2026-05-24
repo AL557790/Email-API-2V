@@ -1,8 +1,7 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template_string
 import requests
 import time
 import os
-from datetime import datetime
 
 app = Flask(__name__)
 
@@ -11,7 +10,6 @@ class TempMailAPI:
         self.base_url = "https://web2.temp-mail.org"
         self.session = requests.Session()
         
-        # Headers متقدمة جداً لمحاولة تجاوز Cloudflare
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
             "Accept": "application/json, text/plain, */*",
@@ -22,68 +20,75 @@ class TempMailAPI:
             "Sec-Fetch-Site": "same-site",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Dest": "empty",
-            "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "Sec-Ch-Ua-Mobile": "?1",
-            "Sec-Ch-Ua-Platform": '"Android"',
-            "Sec-Ch-Ua-Platform-Version": "10.0.0",
-            "Sec-Ch-Ua-Full-Version-List": '"Google Chrome";v="131.0.0.0", "Chromium";v="131.0.0.0"',
-            "Connection": "keep-alive",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
         })
 
     def create_mailbox(self):
         try:
-            print("[DEBUG] جاري إرسال طلب Create...")
-            
-            r = self.session.post(
-                f"{self.base_url}/mailbox", 
-                json={},
-                timeout=30
-            )
-            
-            print(f"[DEBUG] Status Code: {r.status_code}")
-            print(f"[DEBUG] Content-Encoding: {r.headers.get('content-encoding')}")
-            print(f"[DEBUG] Response Length: {len(r.text)}")
-            
+            r = self.session.post(f"{self.base_url}/mailbox", json={}, timeout=25)
             if r.status_code == 200:
-                try:
-                    data = r.json()
-                    return {
-                        "success": True,
-                        "email": data.get("mailbox"),
-                        "token": data.get("token")
-                    }
-                except:
-                    return {"success": False, "error": "Invalid JSON", "details": r.text[:200]}
-            else:
+                data = r.json()
                 return {
-                    "success": False, 
-                    "error": f"Status {r.status_code}",
-                    "details": r.text[:400]
+                    "success": True,
+                    "email": data.get("mailbox"),
+                    "token": data.get("token")
                 }
+            return {"success": False, "error": f"Status {r.status_code}"}
         except Exception as e:
             return {"success": False, "error": str(e)}
-
-    def get_messages(self, token):
-        try:
-            r = self.session.get(
-                f"{self.base_url}/messages",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=15
-            )
-            if r.status_code == 401:
-                return {"error": "expired"}
-            if r.status_code == 200:
-                return r.json().get("messages", [])
-            return []
-        except:
-            return []
 
 temp_api = TempMailAPI()
 mailboxes = {}
 
-# ===================== Routes =====================
+# ===================== HTML Template =====================
+HTML = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TempMail API</title>
+    <style>
+        body { font-family: Arial; background: #0f0f0f; color: #0f0; text-align: center; padding: 20px; }
+        .container { max-width: 700px; margin: auto; background: #1a1a1a; padding: 20px; border-radius: 10px; }
+        button { padding: 12px 25px; font-size: 18px; background: #00ff00; color: black; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background: #00cc00; }
+        .email { font-size: 22px; color: #00ffaa; margin: 20px 0; word-break: break-all; }
+        pre { background: #000; padding: 10px; text-align: right; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌐 TempMail API</h1>
+        <p>السيرفر شغال الآن</p>
+        
+        <button onclick="createEmail()">🔥 إنشاء إيميل جديد</button>
+        
+        <div id="result" class="email"></div>
+        
+        <script>
+            async function createEmail() {
+                document.getElementById('result').innerHTML = 'جاري الإنشاء...';
+                const res = await fetch('/create', { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.status === 'success') {
+                    document.getElementById('result').innerHTML = 
+                        `<strong>📧 الإيميل:</strong><br>${data.email}<br><br>` +
+                        `<strong>🔑 التوكن:</strong><br><small>${data.token}</small>`;
+                } else {
+                    document.getElementById('result').innerHTML = '❌ فشل: ' + JSON.stringify(data);
+                }
+            }
+        </script>
+    </div>
+</body>
+</html>
+"""
+
+@app.route('/')
+def home():
+    """عند فتح الموقع يظهر الصفحة الجميلة"""
+    return render_template_string(HTML)
 
 @app.route('/create', methods=['POST'])
 def create_email():
@@ -103,13 +108,19 @@ def create_email():
 def get_messages():
     token = request.args.get('token')
     if not token or token not in mailboxes:
-        return jsonify({"error": "Invalid or missing token"}), 401
+        return jsonify({"error": "Invalid token"}), 401
 
-    msgs = temp_api.get_messages(token)
-    if isinstance(msgs, dict) and "error" in msgs:
-        return jsonify({"error": "Session expired"}), 401
-
-    return jsonify({"messages": msgs})
+    try:
+        r = temp_api.session.get(
+            f"{temp_api.base_url}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15
+        )
+        if r.status_code == 200:
+            return jsonify({"messages": r.json().get("messages", [])})
+        return jsonify({"error": f"Status {r.status_code}"}), 400
+    except:
+        return jsonify({"error": "connection error"}), 500
 
 
 @app.route('/status', methods=['GET'])
