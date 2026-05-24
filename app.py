@@ -3,9 +3,6 @@ import requests
 import time
 import os
 from datetime import datetime
-from colorama import init, Fore, Style
-
-init(autoreset=True)
 
 app = Flask(__name__)
 
@@ -13,21 +10,24 @@ class TempMailAPI:
     def __init__(self):
         self.base_url = "https://web2.temp-mail.org"
         self.session = requests.Session()
-        self.ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
         
+        # Headers أقوى
         self.session.headers.update({
-            "User-Agent": self.ua,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "ar-DZ,ar;q=0.9",
+            "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
             "Origin": "https://temp-mail.org",
             "Referer": "https://temp-mail.org/",
-            "Content-Type": "application/json",
+            "Sec-Fetch-Site": "same-site",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
         })
 
     def create_mailbox(self):
         try:
-            r = self.session.post(f"{self.base_url}/mailbox", json={}, timeout=15)
+            r = self.session.post(f"{self.base_url}/mailbox", json={}, timeout=20)
+            
             if r.status_code == 200:
                 data = r.json()
                 return {
@@ -35,7 +35,12 @@ class TempMailAPI:
                     "email": data.get("mailbox"),
                     "token": data.get("token")
                 }
-            return {"success": False, "error": f"Status {r.status_code}"}
+            else:
+                return {
+                    "success": False, 
+                    "error": f"Status {r.status_code}",
+                    "details": r.text[:200]
+                }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -44,7 +49,7 @@ class TempMailAPI:
             r = self.session.get(
                 f"{self.base_url}/messages",
                 headers={"Authorization": f"Bearer {token}"},
-                timeout=12
+                timeout=15
             )
             if r.status_code == 401:
                 return {"error": "expired"}
@@ -55,9 +60,7 @@ class TempMailAPI:
             return []
 
 temp_api = TempMailAPI()
-mailboxes = {}   # token -> info
-
-# ====================== Routes ======================
+mailboxes = {}
 
 @app.route('/create', methods=['POST'])
 def create_email():
@@ -90,8 +93,7 @@ def get_messages():
 def status():
     return jsonify({
         "status": "running",
-        "active_mailboxes": len(mailboxes),
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "active_mailboxes": len(mailboxes)
     })
 
 
