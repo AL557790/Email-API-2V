@@ -11,7 +11,7 @@ class TempMailAPI:
         self.base_url = "https://web2.temp-mail.org"
         self.session = requests.Session()
         
-        # Headers تبدو كـ Android Browser حقيقي
+        # Headers متقدمة جداً لمحاولة تجاوز Cloudflare
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
             "Accept": "application/json, text/plain, */*",
@@ -25,31 +25,42 @@ class TempMailAPI:
             "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
             "Sec-Ch-Ua-Mobile": "?1",
             "Sec-Ch-Ua-Platform": '"Android"',
+            "Sec-Ch-Ua-Platform-Version": "10.0.0",
+            "Sec-Ch-Ua-Full-Version-List": '"Google Chrome";v="131.0.0.0", "Chromium";v="131.0.0.0"',
             "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
         })
 
     def create_mailbox(self):
         try:
+            print("[DEBUG] جاري إرسال طلب Create...")
+            
             r = self.session.post(
                 f"{self.base_url}/mailbox", 
                 json={},
-                timeout=25
+                timeout=30
             )
             
-            print(f"[DEBUG] Status: {r.status_code} | Encoding: {r.headers.get('content-encoding')}")
+            print(f"[DEBUG] Status Code: {r.status_code}")
+            print(f"[DEBUG] Content-Encoding: {r.headers.get('content-encoding')}")
+            print(f"[DEBUG] Response Length: {len(r.text)}")
             
             if r.status_code == 200:
-                data = r.json()
-                return {
-                    "success": True,
-                    "email": data.get("mailbox"),
-                    "token": data.get("token")
-                }
+                try:
+                    data = r.json()
+                    return {
+                        "success": True,
+                        "email": data.get("mailbox"),
+                        "token": data.get("token")
+                    }
+                except:
+                    return {"success": False, "error": "Invalid JSON", "details": r.text[:200]}
             else:
                 return {
                     "success": False, 
                     "error": f"Status {r.status_code}",
-                    "details": r.text[:300]
+                    "details": r.text[:400]
                 }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -77,7 +88,7 @@ mailboxes = {}
 @app.route('/create', methods=['POST'])
 def create_email():
     result = temp_api.create_mailbox()
-    if result["success"]:
+    if result.get("success"):
         token = result["token"]
         mailboxes[token] = {"email": result["email"], "created_at": time.time()}
         return jsonify({
