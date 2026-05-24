@@ -11,22 +11,32 @@ class TempMailAPI:
         self.base_url = "https://web2.temp-mail.org"
         self.session = requests.Session()
         
-        # Headers أقوى
+        # Headers تبدو كـ Android Browser حقيقي
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
             "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Language": "ar-DZ,ar;q=0.9,en-US;q=0.8",
             "Accept-Encoding": "gzip, deflate, br",
             "Origin": "https://temp-mail.org",
             "Referer": "https://temp-mail.org/",
             "Sec-Fetch-Site": "same-site",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Dest": "empty",
+            "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+            "Sec-Ch-Ua-Mobile": "?1",
+            "Sec-Ch-Ua-Platform": '"Android"',
+            "Connection": "keep-alive",
         })
 
     def create_mailbox(self):
         try:
-            r = self.session.post(f"{self.base_url}/mailbox", json={}, timeout=20)
+            r = self.session.post(
+                f"{self.base_url}/mailbox", 
+                json={},
+                timeout=25
+            )
+            
+            print(f"[DEBUG] Status: {r.status_code} | Encoding: {r.headers.get('content-encoding')}")
             
             if r.status_code == 200:
                 data = r.json()
@@ -39,7 +49,7 @@ class TempMailAPI:
                 return {
                     "success": False, 
                     "error": f"Status {r.status_code}",
-                    "details": r.text[:200]
+                    "details": r.text[:300]
                 }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -61,6 +71,8 @@ class TempMailAPI:
 
 temp_api = TempMailAPI()
 mailboxes = {}
+
+# ===================== Routes =====================
 
 @app.route('/create', methods=['POST'])
 def create_email():
