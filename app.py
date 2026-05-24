@@ -55,24 +55,60 @@ class TempMail:
         self.email = None
 
     def create_email(self):
-        r = self.session.post(f"{BASE_URL}/mailbox", json={})
-        if r.status_code == 200:
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+            "Origin": "https://temp-mail.org",
+            "Referer": "https://temp-mail.org/"
+        }
+
+        try:
+            r = self.session.post(
+                f"{BASE_URL}/mailbox",
+                json={},
+                headers=headers,
+                timeout=15
+            )
+        except Exception:
+            return None
+
+        print("STATUS:", r.status_code)
+        print("TEXT:", r.text[:200])
+
+        if r.status_code != 200:
+            return None
+
+        try:
             data = r.json()
-            self.token = data.get("token")
-            self.email = data.get("mailbox")
-            return data
-        return None
+        except Exception:
+            return None
+
+        self.token = data.get("token")
+        self.email = data.get("mailbox")
+
+        if not self.token or not self.email:
+            return None
+
+        return data
 
     def get_messages(self):
         if not self.token:
             return []
 
-        r = self.session.get(
-            f"{BASE_URL}/messages",
-            headers={"Authorization": f"Bearer {self.token}"}
-        )
+        try:
+            r = self.session.get(
+                f"{BASE_URL}/messages",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=15
+            )
 
-        return r.json().get("messages", [])
+            if r.status_code != 200:
+                return []
+
+            return r.json().get("messages", [])
+
+        except Exception:
+            return []
 
 
 @app.route("/")
@@ -96,7 +132,7 @@ def create():
     data = tm.create_email()
 
     if not data:
-        return jsonify({"error": "failed"}), 500
+        return jsonify({"error": "failed to create email"}), 500
 
     return jsonify({
         "email": tm.email,
